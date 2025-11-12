@@ -1,44 +1,20 @@
-import React, {
-  createContext,
-  useContext,
-  useState,
-  useMemo,
-  useEffect,
-  useCallback,
-} from "react";
+// src/Components/AuthContext.js
+import React, { createContext, useContext, useState, useMemo, useEffect, useCallback } from "react";
 
-const AuthContext = createContext();
-
-function getStoredValue(key, fallback = null) {
-  if (typeof window === "undefined") return fallback;
-  const stored = window.localStorage.getItem(key);
-  if (!stored) return fallback;
-  try {
-    return JSON.parse(stored);
-  } catch (error) {
-    console.warn(`No se pudo parsear el valor almacenado para ${key}`, error);
-    return fallback;
-  }
-}
-
+const AuthContext = createContext()
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() => getStoredValue("docedigital_token", null));
-  const [user, setUser] = useState(() => getStoredValue("docedigital_user", null));
+  const [token, setToken] = useState(() => JSON.parse(localStorage.getItem("docedigital_token") || "null"));
+  const [user, setUser] = useState(() => JSON.parse(localStorage.getItem("docedigital_user") || "null"));
   const [loading, setLoading] = useState(false);
-  const apiBase = useMemo(() => process.env.REACT_APP_API_URL || "http://localhost:5000", []);
+
+  const API_URL = useMemo(() => process.env.REACT_APP_API_URL || "http://localhost:5000", []);
 
   const persist = useCallback((newToken, newUser) => {
-    if (typeof window === "undefined") return;
-    if (newToken) {
-      window.localStorage.setItem("docedigital_token", JSON.stringify(newToken));
-    } else {
-      window.localStorage.removeItem("docedigital_token");
-    }
-    if (newUser) {
-      window.localStorage.setItem("docedigital_user", JSON.stringify(newUser));
-    } else {
-      window.localStorage.removeItem("docedigital_user");
-    }
+    if (newToken) localStorage.setItem("docedigital_token", JSON.stringify(newToken));
+    else localStorage.removeItem("docedigital_token");
+
+    if (newUser) localStorage.setItem("docedigital_user", JSON.stringify(newUser));
+    else localStorage.removeItem("docedigital_user");
   }, []);
 
   const logout = useCallback(() => {
@@ -50,60 +26,48 @@ export function AuthProvider({ children }) {
   const fetchProfile = useCallback(
     async (authToken) => {
       try {
-        const response = await fetch(`${apiBase}/api/auth/profile`, {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
+        const r = await fetch(`${API_URL}/api/auth/profile`, {
+          headers: { Authorization: `Bearer ${authToken}` },
         });
-        if (!response.ok) {
-          throw new Error("No autorizado");
-        }
-        const data = await response.json();
+        if (!r.ok) throw new Error("No autorizado");
+        const data = await r.json();
         if (data?.user) {
           setUser(data.user);
           persist(authToken, data.user);
         }
-      } catch (error) {
-        console.warn("Token inválido, cerrando sesión.", error);
+      } catch {
         logout();
       } finally {
         setLoading(false);
       }
     },
-    [apiBase, logout, persist]
+    [API_URL, logout, persist]
   );
 
   useEffect(() => {
-    let cancelled = false;
     if (token && !user) {
       setLoading(true);
-      fetchProfile(token).finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      fetchProfile(token);
     }
-    return () => {
-      cancelled = true;
-    };
   }, [token, user, fetchProfile]);
 
+  // ⬇️ LOGIN CORRECTO: usa email + password y llama /api/auth/login
   const login = useCallback(
-    async (username, password) => {
+    async (email, password) => {
       setLoading(true);
       try {
-        const response = await fetch(`${apiBase}/api/auth/login`, {
+        const res = await fetch(`${API_URL}/api/auth/login`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ username, password }),
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
         });
 
-        if (!response.ok) {
-          const errorBody = await response.json().catch(() => ({}));
-          throw new Error(errorBody.message || "No se pudo iniciar sesión");
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.message || "No se pudo iniciar sesión");
         }
 
-        const data = await response.json();
+        const data = await res.json(); // { token, user }
         setToken(data.token);
         setUser(data.user);
         persist(data.token, data.user);
@@ -112,12 +76,12 @@ export function AuthProvider({ children }) {
         setLoading(false);
       }
     },
-    [apiBase, persist]
+    [API_URL, persist]
   );
 
   const value = useMemo(
     () => ({
-      apiBase,
+      apiBase: API_URL,
       token,
       user,
       login,
@@ -125,16 +89,14 @@ export function AuthProvider({ children }) {
       loading,
       isAuthenticated: Boolean(token && user),
     }),
-    [apiBase, token, user, login, logout, loading]
+    [API_URL, token, user, login, logout, loading]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error("useAuth debe usarse dentro de un AuthProvider");
-  }
-  return context;
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth debe usarse dentro de un AuthProvider");
+  return ctx;
 }

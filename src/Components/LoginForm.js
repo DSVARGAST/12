@@ -3,20 +3,20 @@ import { useAuth } from "./AuthContext";
 
 function LoginForm({ onSuccess }) {
   const { login, loading } = useAuth();
-  const [form, setForm] = useState({ username: "", password: "" });
+  const [form, setForm] = useState({ email: "", password: "" });
   const [error, setError] = useState("");
 
-  const handleChange = (event) => {
-    const { name, value } = event.target;
+  const handleChange = (e) => {
+    const { name, value } = e.target;
     setForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
+  const handleSubmit = async (e) => {
+    e.preventDefault();
     setError("");
     try {
-      const user = await login(form.username.trim(), form.password);
-      if (onSuccess) onSuccess(user);
+      const user = await login(form.email.trim(), form.password);
+      onSuccess?.(user);
     } catch (err) {
       setError(err.message || "No se pudo iniciar sesión");
     }
@@ -26,21 +26,23 @@ function LoginForm({ onSuccess }) {
     <div className="card login-card">
       <h2>Inicia sesión para continuar</h2>
       <p className="muted">
-        Introduce tu usuario y contraseña para gestionar publicaciones según tus privilegios.
+        Introduce tu email y contraseña para gestionar publicaciones según tus privilegios.
       </p>
+
       <form onSubmit={handleSubmit} className="form-grid">
         <label>
-          Usuario
+          Email
           <input
-            name="username"
-            type="text"
-            autoComplete="username"
-            value={form.username}
+            name="email"
+            type="email"
+            autoComplete="email"
+            value={form.email}
             onChange={handleChange}
-            placeholder="Usuario"
+            placeholder="admin@docedigital.test"
             required
           />
         </label>
+
         <label>
           Contraseña
           <input
@@ -53,7 +55,9 @@ function LoginForm({ onSuccess }) {
             required
           />
         </label>
+
         {error ? <div className="error-banner">{error}</div> : null}
+
         <button type="submit" className="primary" disabled={loading}>
           {loading ? "Validando..." : "Ingresar"}
         </button>
