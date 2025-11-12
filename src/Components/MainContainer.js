@@ -21,7 +21,8 @@ function MainContainer() {
   useEffect(() => {
     const fetchPublications = async () => {
       try {
-        const response = await fetch("http://localhost:5000/api/publications"); // URL de tu API
+        const API = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+        const response = await fetch(`${API}/publications`);
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
