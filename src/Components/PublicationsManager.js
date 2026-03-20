@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect } from "react";
+import { FiBarChart2, FiHeart, FiMessageCircle, FiShare2 } from "react-icons/fi";
 import { useAuth } from "./AuthContext";
 
 const initialFilters = {
@@ -341,18 +342,82 @@ function PublicationsManager() {
   };
 
   const totalPublications = useMemo(() => publications.length, [publications]);
+  const totalLikes = useMemo(
+    () => publications.reduce((acc, publication) => acc + Number(publication.total_likes || 0), 0),
+    [publications]
+  );
+  const totalComments = useMemo(
+    () => publications.reduce((acc, publication) => acc + Number(publication.total_comments || 0), 0),
+    [publications]
+  );
+  const totalShares = useMemo(
+    () => publications.reduce((acc, publication) => acc + Number(publication.total_shares || 0), 0),
+    [publications]
+  );
+  const averageLikes = useMemo(
+    () => (totalPublications ? Math.round(totalLikes / totalPublications) : 0),
+    [totalLikes, totalPublications]
+  );
+  const overviewCards = useMemo(
+    () => [
+      {
+        label: "Publicaciones visibles",
+        value: totalPublications,
+        note: "Resultados segun filtros activos",
+        icon: FiBarChart2,
+      },
+      {
+        label: "Likes acumulados",
+        value: totalLikes,
+        note: "Suma del conjunto actual",
+        icon: FiHeart,
+      },
+      {
+        label: "Comentarios",
+        value: totalComments,
+        note: "Interacciones registradas",
+        icon: FiMessageCircle,
+      },
+      {
+        label: "Promedio de likes",
+        value: averageLikes,
+        note: `${totalShares} compartidos en total`,
+        icon: FiShare2,
+      },
+    ],
+    [averageLikes, totalComments, totalLikes, totalPublications, totalShares]
+  );
 
   return (
-    <section className="card publications-card">
+    <section className="publications-view">
+      <section className="overview-grid">
+        {overviewCards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <article key={card.label} className="overview-card">
+              <div className="overview-copy">
+                <span>{card.label}</span>
+                <strong>{card.value}</strong>
+                <small>{card.note}</small>
+              </div>
+              <div className="overview-icon">
+                <Icon />
+              </div>
+            </article>
+          );
+        })}
+      </section>
+
+      <section className="card publications-card">
       <header className="card-header">
         <div>
-          <h1>Panel de publicaciones</h1>
+          <h1>Operacion de publicaciones</h1>
           <p className="muted">
             Gestiona el CRUD, exporta a Excel, ejecuta triggers y aplica filtros con los permisos de tu usuario.
           </p>
         </div>
         <div className="badge-list">
-          <span className="badge">{user?.role || "sin rol"}</span>
+          <span className="badge">{user?.role_name || user?.role_code || "sin rol"}</span>
           <span className="badge secondary">{totalPublications} publicaciones</span>
         </div>
       </header>
@@ -565,6 +630,7 @@ function PublicationsManager() {
           </div>
         </form>
       ) : null}
+      </section>
     </section>
   );
 }

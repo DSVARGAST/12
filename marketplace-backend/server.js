@@ -1,4 +1,3 @@
-// server.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -14,12 +13,10 @@ app.use(cors({ origin: process.env.CORS_ORIGIN || 'http://localhost:3000', crede
 
 let db;
 
-// ===== CONFIGURACIONES BASE =====
 const JWT_SECRET = process.env.JWT_SECRET || 'insecure-development-secret';
 const ENCRYPTION_SECRET = process.env.ENCRYPTION_KEY || 'change-me-in-production';
 const ENCRYPTION_KEY = crypto.createHash('sha256').update(String(ENCRYPTION_SECRET)).digest();
 
-// ===== FUNCIONES AUXILIARES =====
 function encryptText(text) {
   if (text === null || text === undefined) return null;
   if (text === '') return '';
@@ -30,177 +27,367 @@ function encryptText(text) {
 }
 
 function decryptText(value) {
-  if (value === null || value === undefined) return null;
-  if (typeof value !== 'string') return value;
-  if (!value.includes(':')) return value;
-  const [ivHex, encryptedHex] = value.split(':');
-  if (!ivHex || !encryptedHex) return value;
+  if (!value || typeof value !== 'string' || !value.includes(':')) return value;
   try {
+    const [ivHex, encHex] = value.split(':');
     const iv = Buffer.from(ivHex, 'hex');
-    const encrypted = Buffer.from(encryptedHex, 'hex');
+    const enc = Buffer.from(encHex, 'hex');
     const decipher = crypto.createDecipheriv('aes-256-ctr', ENCRYPTION_KEY, iv);
-    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-    return decrypted.toString('utf8');
+    const dec = Buffer.concat([decipher.update(enc), decipher.final()]);
+    return dec.toString('utf8');
   } catch {
     return value;
   }
 }
 
-function mapPublicationRow(row) {
-  return {
-    publication_id: row.publication_id,
-    content: decryptText(row.content),
-    image_url: decryptText(row.image_url),
-    total_likes: row.total_likes,
-    total_comments: row.total_comments,
-    total_shares: row.total_shares,
-    created_at: row.created_at,
-  };
-}
+const mapPub = (row) => ({
+  publication_id: row.publication_id,
+  content: decryptText(row.content),
+  image_url: row.image_url ? decryptText(row.image_url) : null,
+  total_likes: row.total_likes,
+  total_comments: row.total_comments,
+  total_shares: row.total_shares,
+  created_at: row.created_at,
+});
 
-// ===== AUTENTICACIÓN =====
-function authenticate(requiredPermissions = []) {
+function auth(required = []) {
   return (req, res, next) => {
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+    const token = (req.headers.authorization || '').replace(/^Bearer /, '');
     if (!token) return res.status(401).json({ message: 'No autorizado' });
 
     try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      req.user = decoded;
+      req.user = jwt.verify(token, JWT_SECRET);
     } catch {
-      return res.status(401).json({ message: 'Token inválido o expirado' });
+      return res.status(401).json({ message: 'Token invalido o expirado' });
     }
 
-    const missing = requiredPermissions.filter(p => !req.user?.permissions?.[p]);
-    if (missing.length > 0) return res.status(403).json({ message: 'Permisos insuficientes', missing });
+    const missing = required.filter((permission) => !req.user?.permissions?.[permission]);
+    if (missing.length) {
+      return res.status(403).json({ message: 'Permisos insuficientes', missing });
+    }
+
     next();
   };
 }
 
-// ===== HEALTH CHECK =====
 app.get('/health', async (_req, res) => {
   try {
-    if (!db) throw new Error('db not ready');
     await db.query('SELECT 1');
     return res.json({ ok: true, db: 'ok' });
-  } catch (e) {
-    return res.status(200).json({ ok: true, db: 'error', msg: e.message });
+  } catch (error) {
+    return res.json({ ok: true, db: 'error', msg: error.message });
   }
 });
 
-// ===== LOGIN =====
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ message: 'Faltan credenciales' });
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Faltan credenciales' });
+  }
+
   try {
     const [rows] = await db.execute(
-      `SELECT u.*, r.code AS role_code, r.name AS role_name,
-              r.can_create, r.can_update, r.can_delete, r.can_export, r.can_manage_triggers
-       FROM users u
-       JOIN roles r ON u.role_id = r.id
-       WHERE email = ? AND is_active = 1 LIMIT 1`,
+      `SELECT user_id, email, full_name, password, status
+       FROM users
+       WHERE email = ? AND status = 'active'
+       LIMIT 1`,
       [email]
     );
-    if (!rows.length) return res.status(401).json({ message: 'Credenciales inválidas' });
+
+    if (!rows.length) {
+      return res.status(401).json({ message: 'Credenciales invalidas' });
+    }
 
     const user = rows[0];
-    const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) return res.status(401).json({ message: 'Credenciales inválidas' });
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) {
+      return res.status(401).json({ message: 'Credenciales invalidas' });
+    }
 
     const safeUser = {
-      id: user.id,
+      id: user.user_id,
+      name: user.full_name,
       full_name: user.full_name,
       email: user.email,
-      role_id: user.role_id,
-      role_code: user.role_code,
-      role_name: user.role_name,
+      role_code: 'admin',
+      role_name: 'Administrador',
       permissions: {
-        canCreate: !!user.can_create,
-        canUpdate: !!user.can_update,
-        canDelete: !!user.can_delete,
-        canExport: !!user.can_export,
-        canManageTriggers: !!user.can_manage_triggers,
+        canCreate: true,
+        canUpdate: true,
+        canDelete: true,
+        canExport: true,
+        canManageTriggers: true,
       },
     };
+
     const token = jwt.sign(safeUser, JWT_SECRET, { expiresIn: '1h' });
-    res.json({ token, user: safeUser });
-  } catch (e) {
-    console.error('Error login:', e.message);
-    res.status(500).json({ message: 'Error interno' });
+    return res.json({ token, user: safeUser });
+  } catch (error) {
+    return res.status(500).json({ message: 'Error interno' });
   }
 });
 
-app.get('/api/auth/profile', authenticate(), (req, res) => res.json({ user: req.user }));
+app.get('/api/auth/profile', auth(), (req, res) => res.json({ user: req.user }));
 
-// ====== PUBLICATIONS ======
+app.get('/api/users', auth(), async (_req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `SELECT user_id, email, full_name, status, registration_date
+       FROM users
+       ORDER BY full_name ASC`
+    );
 
-// Logger para verificar rutas
+    return res.json(
+      rows.map((user) => ({
+        id: user.user_id,
+        email: user.email,
+        full_name: user.full_name,
+        status: user.status,
+        registration_date: user.registration_date,
+      }))
+    );
+  } catch (error) {
+    return res.status(500).json({ message: 'Error al listar usuarios' });
+  }
+});
+
 app.use((req, _res, next) => {
-  if (req.path.startsWith('/api/publications')) console.log('>>', req.method, req.path);
+  if (req.path.startsWith('/api/publications')) {
+    console.log('>>', req.method, req.path, req.query);
+  }
   next();
 });
 
+app.get('/api/publications', auth(), async (req, res) => {
+  const { search, startDate, endDate, minLikes, maxLikes } = req.query || {};
+  const where = [];
+  const params = [];
 
-app.get('/api/publications/export', authenticate(['canExport']), async (req, res) => {
+  if (startDate) {
+    where.push('DATE(created_at) >= ?');
+    params.push(startDate);
+  }
+  if (endDate) {
+    where.push('DATE(created_at) <= ?');
+    params.push(endDate);
+  }
+  if (minLikes) {
+    where.push('total_likes >= ?');
+    params.push(Number(minLikes) || 0);
+  }
+  if (maxLikes) {
+    where.push('total_likes <= ?');
+    params.push(Number(maxLikes) || 0);
+  }
+
+  const sql = `SELECT publication_id, content, image_url, total_likes, total_comments, total_shares, created_at
+    FROM publications
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY created_at DESC`;
 
   try {
-    const [rows] = await db.execute(`
-      SELECT publication_id, content, image_url, total_likes, total_comments, total_shares, created_at
-      FROM publications ORDER BY created_at DESC
-    `);
-    const publications = rows.map(mapPublicationRow);
+    const [rows] = await db.execute(sql, params);
+    let publications = rows.map(mapPub);
+
+    if (search && String(search).trim()) {
+      const query = String(search).toLowerCase();
+      publications = publications.filter((publication) =>
+        (publication.content || '').toLowerCase().includes(query)
+      );
+    }
+
+    return res.json(publications);
+  } catch (error) {
+    return res.status(500).json({ message: 'Error al listar publicaciones' });
+  }
+});
+
+app.post('/api/publications', auth(['canCreate']), async (req, res) => {
+  const { content, imageUrl, totalLikes = 0, totalComments = 0, totalShares = 0 } = req.body || {};
+  if (!content || !String(content).trim()) {
+    return res.status(400).json({ message: 'Contenido requerido' });
+  }
+
+  try {
+    const [result] = await db.execute(
+      `INSERT INTO publications (
+        user_id, content, image_url, scheduled_date, published_date, status, automation_enabled,
+        total_likes, total_comments, total_shares, created_at, updated_at
+      )
+      VALUES (?, ?, ?, NOW(), NULL, 'scheduled', 0, ?, ?, ?, NOW(), NOW())`,
+      [
+        req.user.id,
+        encryptText(String(content).trim()),
+        imageUrl ? encryptText(String(imageUrl).trim()) : null,
+        Number(totalLikes) || 0,
+        Number(totalComments) || 0,
+        Number(totalShares) || 0,
+      ]
+    );
+
+    const [rows] = await db.execute(
+      'SELECT publication_id, content, image_url, total_likes, total_comments, total_shares, created_at FROM publications WHERE publication_id = ?',
+      [result.insertId]
+    );
+
+    return res.status(201).json(mapPub(rows[0]));
+  } catch (error) {
+    return res.status(500).json({ message: 'Error al crear publicacion' });
+  }
+});
+
+app.put('/api/publications/:id', auth(['canUpdate']), async (req, res) => {
+  const { id } = req.params;
+  const { content, imageUrl, totalLikes = 0, totalComments = 0, totalShares = 0 } = req.body || {};
+
+  try {
+    const [existing] = await db.execute('SELECT 1 FROM publications WHERE publication_id = ?', [id]);
+    if (!existing.length) {
+      return res.status(404).json({ message: 'Publicacion no encontrada' });
+    }
+
+    await db.execute(
+      `UPDATE publications
+       SET content = ?, image_url = ?, total_likes = ?, total_comments = ?, total_shares = ?, updated_at = NOW()
+       WHERE publication_id = ?`,
+      [
+        encryptText(String(content || '')),
+        imageUrl ? encryptText(String(imageUrl).trim()) : null,
+        Number(totalLikes) || 0,
+        Number(totalComments) || 0,
+        Number(totalShares) || 0,
+        id,
+      ]
+    );
+
+    const [rows] = await db.execute(
+      'SELECT publication_id, content, image_url, total_likes, total_comments, total_shares, created_at FROM publications WHERE publication_id = ?',
+      [id]
+    );
+
+    return res.json(mapPub(rows[0]));
+  } catch (error) {
+    return res.status(500).json({ message: 'Error al actualizar publicacion' });
+  }
+});
+
+app.delete('/api/publications/:id', auth(['canDelete']), async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [result] = await db.execute('DELETE FROM publications WHERE publication_id = ?', [id]);
+    if (!result.affectedRows) {
+      return res.status(404).json({ message: 'Publicacion no encontrada' });
+    }
+
+    return res.status(204).end();
+  } catch (error) {
+    return res.status(500).json({ message: 'Error al eliminar publicacion' });
+  }
+});
+
+app.get('/api/publications/export', auth(['canExport']), async (req, res) => {
+  const { search, startDate, endDate, minLikes, maxLikes } = req.query || {};
+  const where = [];
+  const params = [];
+
+  if (startDate) {
+    where.push('DATE(created_at) >= ?');
+    params.push(startDate);
+  }
+  if (endDate) {
+    where.push('DATE(created_at) <= ?');
+    params.push(endDate);
+  }
+  if (minLikes) {
+    where.push('total_likes >= ?');
+    params.push(Number(minLikes) || 0);
+  }
+  if (maxLikes) {
+    where.push('total_likes <= ?');
+    params.push(Number(maxLikes) || 0);
+  }
+
+  const sql = `SELECT publication_id, content, image_url, total_likes, total_comments, total_shares, created_at
+    FROM publications
+    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY created_at DESC`;
+
+  try {
+    const [rows] = await db.execute(sql, params);
+    let data = rows.map(mapPub);
+
+    if (search && String(search).trim()) {
+      const query = String(search).toLowerCase();
+      data = data.filter((publication) =>
+        (publication.content || '').toLowerCase().includes(query)
+      );
+    }
 
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Publicaciones');
+
     sheet.columns = [
-      { header: 'ID', key: 'publication_id', width: 10 },
-      { header: 'Contenido', key: 'content', width: 50 },
+      { header: 'ID', key: 'publication_id', width: 8 },
+      { header: 'Contenido', key: 'content', width: 60 },
       { header: 'Imagen', key: 'image_url', width: 40 },
       { header: 'Likes', key: 'total_likes', width: 10 },
-      { header: 'Comentarios', key: 'total_comments', width: 15 },
-      { header: 'Compartidos', key: 'total_shares', width: 15 },
-      { header: 'Creado', key: 'created_at', width: 25 },
+      { header: 'Comentarios', key: 'total_comments', width: 14 },
+      { header: 'Compartidos', key: 'total_shares', width: 14 },
+      { header: 'Creado', key: 'created_at', width: 22 },
     ];
-    publications.forEach(row => sheet.addRow(row));
 
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', 'attachment; filename="publicaciones.xlsx"');
+    data.forEach((row) => sheet.addRow(row));
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="publicaciones.xlsx"'
+    );
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+
     await workbook.xlsx.write(res);
-    res.end();
-  } catch (err) {
-    console.error('Error al exportar:', err.message);
-    res.status(500).json({ message: 'Error interno al exportar.' });
+    return res.end();
+  } catch (error) {
+    console.error('Error al exportar:', error.message);
+    return res.status(500).json({ message: 'Error interno al exportar.' });
   }
 });
 
-// LISTAR PUBLICACIONES
-app.get('/api/publications', authenticate(), async (_req, res) => {
+app.post('/api/triggers/publication-log', auth(['canManageTriggers']), async (_req, res) => {
   try {
-    const [rows] = await db.execute('SELECT * FROM publications ORDER BY created_at DESC');
-    res.json(rows.map(mapPublicationRow));
-  } catch (err) {
-    res.status(500).json({ message: 'Error al listar publicaciones' });
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS publications_log (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        publication_id BIGINT UNSIGNED,
+        action VARCHAR(20) NOT NULL,
+        at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    const createTrigger = `
+      CREATE TRIGGER trg_publications_insert AFTER INSERT ON publications
+      FOR EACH ROW INSERT INTO publications_log (publication_id, action) VALUES (NEW.publication_id, 'insert')
+    `;
+
+    await db.execute(createTrigger).catch(() => {});
+    return res.json({ message: 'Trigger configurado (o ya existente).' });
+  } catch (error) {
+    return res.status(500).json({ message: 'No se pudo configurar el trigger.' });
   }
 });
 
-// DETALLE PUBLICACIÓN
-app.get('/api/publications/:id', authenticate(), async (req, res) => {
-  const { id } = req.params;
-  const [rows] = await db.execute('SELECT * FROM publications WHERE publication_id = ?', [id]);
-  if (!rows.length) return res.status(404).json({ message: 'Publicación no encontrada' });
-  res.json(mapPublicationRow(rows[0]));
-});
-
-// ===== INICIO SERVIDOR =====
 const PORT = process.env.PORT || 5000;
+
 (async () => {
   try {
     db = await connectDB();
-    app.listen(PORT, () => console.log(`✅ Servidor corriendo en http://localhost:${PORT}`));
-  } catch (e) {
-    console.error('❌ Fallo crítico:', e.message);
+    app.listen(PORT, () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
+  } catch (error) {
+    console.error('Fallo critico:', error.message);
     process.exit(1);
   }
 })();
