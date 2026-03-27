@@ -6,6 +6,8 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const ExcelJS = require('exceljs');
 const connectDB = require('./config/db');
+const { buildSafeUser } = require('./utils/auth');
+const { buildPublicationQuery, filterPublicationsBySearch } = require('./utils/publications');
 
 const app = express();
 app.use(express.json());
@@ -104,21 +106,7 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ message: 'Credenciales invalidas' });
     }
 
-    const safeUser = {
-      id: user.user_id,
-      name: user.full_name,
-      full_name: user.full_name,
-      email: user.email,
-      role_code: 'admin',
-      role_name: 'Administrador',
-      permissions: {
-        canCreate: true,
-        canUpdate: true,
-        canDelete: true,
-        canExport: true,
-        canManageTriggers: true,
-      },
-    };
+    const safeUser = buildSafeUser(user);
 
     const token = jwt.sign(safeUser, JWT_SECRET, { expiresIn: '1h' });
     return res.json({ token, user: safeUser });
@@ -159,42 +147,12 @@ app.use((req, _res, next) => {
 });
 
 app.get('/api/publications', auth(), async (req, res) => {
-  const { search, startDate, endDate, minLikes, maxLikes } = req.query || {};
-  const where = [];
-  const params = [];
-
-  if (startDate) {
-    where.push('DATE(created_at) >= ?');
-    params.push(startDate);
-  }
-  if (endDate) {
-    where.push('DATE(created_at) <= ?');
-    params.push(endDate);
-  }
-  if (minLikes) {
-    where.push('total_likes >= ?');
-    params.push(Number(minLikes) || 0);
-  }
-  if (maxLikes) {
-    where.push('total_likes <= ?');
-    params.push(Number(maxLikes) || 0);
-  }
-
-  const sql = `SELECT publication_id, content, image_url, total_likes, total_comments, total_shares, created_at
-    FROM publications
-    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-    ORDER BY created_at DESC`;
+  const { search } = req.query || {};
+  const { sql, params } = buildPublicationQuery(req.query || {});
 
   try {
     const [rows] = await db.execute(sql, params);
-    let publications = rows.map(mapPub);
-
-    if (search && String(search).trim()) {
-      const query = String(search).toLowerCase();
-      publications = publications.filter((publication) =>
-        (publication.content || '').toLowerCase().includes(query)
-      );
-    }
+    const publications = filterPublicationsBySearch(rows.map(mapPub), search);
 
     return res.json(publications);
   } catch (error) {
@@ -287,42 +245,12 @@ app.delete('/api/publications/:id', auth(['canDelete']), async (req, res) => {
 });
 
 app.get('/api/publications/export', auth(['canExport']), async (req, res) => {
-  const { search, startDate, endDate, minLikes, maxLikes } = req.query || {};
-  const where = [];
-  const params = [];
-
-  if (startDate) {
-    where.push('DATE(created_at) >= ?');
-    params.push(startDate);
-  }
-  if (endDate) {
-    where.push('DATE(created_at) <= ?');
-    params.push(endDate);
-  }
-  if (minLikes) {
-    where.push('total_likes >= ?');
-    params.push(Number(minLikes) || 0);
-  }
-  if (maxLikes) {
-    where.push('total_likes <= ?');
-    params.push(Number(maxLikes) || 0);
-  }
-
-  const sql = `SELECT publication_id, content, image_url, total_likes, total_comments, total_shares, created_at
-    FROM publications
-    ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-    ORDER BY created_at DESC`;
+  const { search } = req.query || {};
+  const { sql, params } = buildPublicationQuery(req.query || {});
 
   try {
     const [rows] = await db.execute(sql, params);
-    let data = rows.map(mapPub);
-
-    if (search && String(search).trim()) {
-      const query = String(search).toLowerCase();
-      data = data.filter((publication) =>
-        (publication.content || '').toLowerCase().includes(query)
-      );
-    }
+    const data = filterPublicationsBySearch(rows.map(mapPub), search);
 
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Publicaciones');
