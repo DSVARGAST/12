@@ -14,19 +14,20 @@ function LoginForm({ onSuccess }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
+
     try {
       const user = await login(form.email.trim(), form.password);
       onSuccess?.(user);
     } catch (err) {
-      setError(err.message || "No se pudo iniciar sesión");
+      setError(err.message || "No se pudo abrir el modo demo");
     }
   };
 
   return (
     <div className="card login-card">
-      <h2>Inicia sesión para continuar</h2>
+      <h2>Entra al modo demo</h2>
       <p className="muted">
-        Introduce tu email y contraseña para gestionar publicaciones según tus privilegios.
+        Este proyecto ya quedo como frontend standalone. Usa cualquier correo y contrasena para recorrer la interfaz.
       </p>
 
       <form onSubmit={handleSubmit} className="form-grid">
@@ -38,20 +39,20 @@ function LoginForm({ onSuccess }) {
             autoComplete="email"
             value={form.email}
             onChange={handleChange}
-            placeholder="admin@docedigital.test"
+            placeholder="demo@docedigital.co"
             required
           />
         </label>
 
         <label>
-          Contraseña
+          Contrasena
           <input
             name="password"
             type="password"
             autoComplete="current-password"
             value={form.password}
             onChange={handleChange}
-            placeholder="Contraseña"
+            placeholder="Cualquier contrasena"
             required
           />
         </label>
@@ -59,7 +60,7 @@ function LoginForm({ onSuccess }) {
         {error ? <div className="error-banner">{error}</div> : null}
 
         <button type="submit" className="primary" disabled={loading}>
-          {loading ? "Validando..." : "Ingresar"}
+          {loading ? "Abriendo demo..." : "Entrar"}
         </button>
       </form>
     </div>

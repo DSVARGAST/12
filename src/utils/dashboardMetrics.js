@@ -9,6 +9,22 @@ const PLATFORM_PALETTE = {
 
 const PLATFORM_ORDER = Object.keys(PLATFORM_PALETTE);
 
+function resolvePlatformName(publication, index) {
+  const rawPlatform =
+    publication?.platform?.name ||
+    publication?.platform_name ||
+    publication?.social_network ||
+    publication?.network ||
+    publication?.platform;
+
+  if (typeof rawPlatform === "string") {
+    const match = PLATFORM_ORDER.find((platform) => platform.toLowerCase() === rawPlatform.toLowerCase());
+    if (match) return match;
+  }
+
+  return PLATFORM_ORDER[index % PLATFORM_ORDER.length];
+}
+
 export function formatDate(value) {
   if (!value) return "Sin fecha";
 
@@ -58,7 +74,7 @@ export function deriveDashboardData(publications = [], users = []) {
       const createdAt = new Date(publication.created_at);
       const jsDay = createdAt.getDay();
       const mondayBasedDay = (jsDay + 6) % 7;
-      const platform = PLATFORM_ORDER[index % PLATFORM_ORDER.length];
+      const platform = resolvePlatformName(publication, index);
 
       acc.interactions += interactions;
       acc.likes += likes;
